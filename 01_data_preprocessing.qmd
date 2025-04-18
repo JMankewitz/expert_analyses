@@ -290,6 +290,26 @@ test_across_subj |>
 
 
 ```{r}
+know_toy_by_subj <- d_know_toy_trials |> 
+  group_by(SubjNum, trial_type_fixed) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+know_toy_by_subj
+
+mean(know_toy_by_subj$prop_correct)
+
+know_color_by_subj <- d_know_color_trials |> 
+  group_by(SubjNum, trial_type_fixed) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+know_color_by_subj
+
+mean(know_color_by_subj$prop_correct)
+
 know_questions_by_subj <- rbind(know_toy_by_subj |> mutate(trialType = "Generalization"),
       know_color_by_subj |> mutate(trialType = "Explicit"))
 
@@ -362,25 +382,7 @@ test_w_generalization_generalization |>
 
 
 ```{r}
-know_toy_by_subj <- d_know_toy_trials |> 
-  group_by(SubjNum, trial_type_fixed) |> 
-  summarize(n_trials = n(), 
-            n_correct = sum(correct, na.rm = TRUE),
-             prop_correct = n_correct/n_trials)
 
-know_toy_by_subj
-
-mean(know_toy_by_subj$prop_correct)
-
-know_color_by_subj <- d_know_color_trials |> 
-  group_by(SubjNum, trial_type_fixed) |> 
-  summarize(n_trials = n(), 
-            n_correct = sum(correct, na.rm = TRUE),
-             prop_correct = n_correct/n_trials)
-
-know_color_by_subj
-
-mean(know_color_by_subj$prop_correct)
 
 ```
 
