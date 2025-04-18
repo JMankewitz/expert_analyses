@@ -1,0 +1,386 @@
+
+# Load Functions and Libraries
+
+```{r}
+library(tidyverse)
+library(here)
+
+# file paths
+
+p1_raw_data_path <- "data/raw_data/pilot_1"
+p2_raw_data_path <- "data/raw_data/pilot_2"
+processed_data <- "data/processed_data"
+
+order_pilot1_url <- "https://raw.githubusercontent.com/aesimon2/aesimon2.github.io/refs/heads/main/expert/orders/expertpilot1.csv"
+order_pilot2_url <- "https://raw.githubusercontent.com/aesimon2/aesimon2.github.io/refs/heads/main/expert/orders/expertpilot2.csv"
+
+subject_data_path <- "data/subj_info.csv"
+
+included <- c("Exppilot002", "Exppilot007", "Exppilot008", "Exppilot010", 
+              "Exppilot012", "Exppilot013", "Exppilot014", "Exppilot017", 
+              "Exppilot020", "Exppilot026")
+```
+
+```{r}
+color_map <- list("expert" = "#6E408A", "nonexpert" = "#B069DB", "generalization" = "#F2BB05", "extension" = "#D74E09")
+```
+
+
+# Load Data
+
+```{r}
+order_pilot2 <- read_csv(order_pilot2_url)
+order_pilot1 <- read_csv(order_pilot1_url)
+subject_data <- read_csv(subject_data_path) |> 
+  rename("SubjNum" = "Sub Num",
+         "age_months" = "Age") |> 
+  mutate(age_years = age_months/12)
+
+pilot_1_experiment_names <- list.files(path = p1_raw_data_path, pattern=".txt", full.names = TRUE)
+pilot_2_experiment_names <- list.files(path = p2_raw_data_path, pattern=".txt", full.names = TRUE)
+
+read_experiment_data <- function(file_name){
+  exp_path_split <- str_split(file_name, pattern="_")
+  
+  order_name <- exp_path_split[[1]][4]
+  participant_number <- exp_path_split[[1]][5]
+  
+  part_data <- read_csv(file_name) |> 
+    mutate("SubjNum" = participant_number,
+           "order_num" = order_name)
+  
+  return(part_data)
+}
+
+d_data_p1_raw <- do.call(dplyr::bind_rows, lapply(pilot_1_experiment_names, read_experiment_data))
+
+d_data_p2_raw <- do.call(dplyr::bind_rows, lapply(pilot_2_experiment_names, read_experiment_data))
+
+d_p1 <- d_data_p1_raw |> 
+  mutate(auditory_stimulus = gsub(pattern = "stimuli/sounds/", replacement = "", stimulus),
+         auditory_stimulus = gsub(pattern = ".wav", replacement = "",auditory_stimulus )) |> 
+select(trial_number = trial_index, everything(), -trial_type) |> 
+  left_join(order_pilot1 |> 
+              select(auditory_stimulus, trial_type, left_image, right_image, target_label, target_side)) # some of these trial orders seem off to me?
+
+d_p2 <- d_data_p2_raw |> 
+   mutate(auditory_stimulus = gsub(pattern = "stimuli/sounds/", replacement = "", stimulus),
+         auditory_stimulus = gsub(pattern = ".wav", replacement = "",auditory_stimulus )) |> 
+  select(trial_number = trial_index, everything(), -trial_type) |> 
+    left_join(order_pilot2 |> 
+              select(auditory_stimulus, trial_type, left_image, right_image, target_label, target_side)) # some of 
+
+d_all_full <- rbind(d_p1, d_p2) |> 
+#d_full <- d_p2 |> 
+  # get the test trials into the same format
+  mutate(trial_type_fixed = case_when(trial_type == "FAM_LWL" ~ "Fam_test",
+                                      trial_type == "ImmTest" & 
+                                        auditory_stimulus %in% c("find_dax", "find_gasser", 
+                                                                 "find_posk", "find_vab") ~ "Match_test",
+                                      trial_type == "ImmTest" & 
+                                        auditory_stimulus %in% c("where_roke", "where_smope", 
+                                                                 "where_teebu", "where_fisp") ~ "Nonmatch_test",
+                                      (trial_type == "ImmTest" | trial_type == "Match_test")& 
+                                        auditory_stimulus %in% c("whoknows_bluetoys", 
+                                                                 "whoknows_redtoys") ~ "Knowcolor_test",
+                                      (trial_type == "ImmTest" | trial_type == "Match_test")& 
+                                        auditory_stimulus %in% c("whoknowsmore") ~ "Knownovel_test",
+                                      TRUE ~ trial_type))
+
+
+d_full <- d_all_full |> filter(SubjNum %in% included) |> left_join(subject_data)
+```
+
+# Participant counts
+
+```{r}
+d_all_full |> group_by(SubjNum, order_num) |> 
+  summarize(n_trials = n())
+```
+
+
+# Restrict to test
+
+```{r}
+d_fam_trials <- d_full |> filter(trial_type_fixed == "Fam_test")
+d_test_trials <- d_full |> filter(trial_type_fixed == "Match_test" | trial_type_fixed == "Nonmatch_test")
+d_know_toy_trials <- d_full |>filter(trial_type_fixed == "Knownovel_test")
+d_know_color_trials <- d_full |>filter(trial_type_fixed == "Knowcolor_test")
+
+```
+
+```{r}
+fam_by_subj <- d_fam_trials |> 
+  filter(button_pressed != "null") |> 
+  group_by(SubjNum, trial_type_fixed, age_years) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+fam_across_subject <- fam_by_subj |> 
+  group_by(trial_type_fixed, age_years) |> 
+  summarize(mean_correct = mean(prop_correct),
+            sd_correct = sd(prop_correct))
+
+fam_across_subject |> 
+  ggplot(aes(x = trial_type_fixed, y = mean_correct)) + 
+  geom_bar(stat = "identity", fill = "gray") + 
+  ylim(0, 1) + 
+  theme_minimal(base_size = 14) + 
+  geom_dotplot(data = fam_by_subj, aes(y = prop_correct), 
+               binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=.75) + 
+  labs(title = " Accuracy on Familiar Object Trials",
+       subtitle = "Each point is a participant",
+      y = "Proportion Correct") + 
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+
+fam_by_subj |> ggplot(aes(x = age_years, y = prop_correct)) + 
+  #geom_jitter(width = 0, height = 0) + 
+  geom_point() +
+  theme_minimal() + 
+  labs(title = "Accuracy on Familiar Trials", 
+       x = "Age (in years)",
+       y = "Prop. Correct") + 
+  ylim(0,1)
+```
+
+```{r}
+
+# Create a mapping dictionary
+label_map <- c("Match_test" = "Expert", 
+               "Nonmatch_test" = "Nonexpert")
+
+d_test_trials |> 
+  mutate(trial_type_renamed = label_map[trial_type_fixed]) |> 
+  group_by(SubjNum, trial_type_renamed) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+test_by_subj <- d_test_trials |> 
+    mutate(trial_type_renamed = label_map[trial_type_fixed],
+           age_cut = cut(age_years, 
+                         breaks = c(3, 3.25, 4),
+                         labels = c("Young (3-3.25)", "Older (3.25-4)"),
+                         include.lowest = T)) |> 
+  group_by(SubjNum, trial_type_renamed, age_cut) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+test_across_subj_age <- test_by_subj |> 
+  group_by(trial_type_renamed, age_cut) |> 
+  summarize(mean_prop_correct = mean(prop_correct,na.rm = TRUE))
+
+test_across_subj_age |> 
+  ggplot(aes(y = mean_prop_correct, x = trial_type_renamed)) + 
+  geom_bar(aes(fill = trial_type_renamed), stat = "identity") + 
+  theme_minimal(base_size = 14) + 
+  geom_dotplot(data = test_by_subj, aes(y = prop_correct), 
+               binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=.75) + 
+  ylim(0,1) +
+  labs(title = "Accuracy on Test Object Trials",
+       subtitle = "Each point is a participant",
+       y = "Proportion Correct", 
+       x = "Label Source", 
+       fill = "Label Source") +
+  facet_wrap(~ age_cut)
+  
+test_across_subj <- test_by_subj |> 
+  group_by(trial_type_renamed) |> 
+  summarize(mean_prop_correct = mean(prop_correct,na.rm = TRUE))
+
+p_test_across_subj <- test_across_subj |> 
+  ggplot(aes(y = mean_prop_correct, x = trial_type_renamed)) + 
+  geom_hline(yintercept = .5, linetype = "dotted") +
+  geom_bar(aes(fill = trial_type_renamed), stat = "identity") + 
+  theme_minimal(base_size = 14) + 
+  geom_dotplot(data = test_by_subj, aes(y = prop_correct), 
+               binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=.75) + 
+  ylim(0,1) +
+  labs(title = "Accuracy on Test Object Trials",
+       subtitle = "Each point is a participant",
+       y = "Proportion Correct", 
+       x = "Label Source", 
+       fill = "Label Source")
+
+ggreveal::reveal_aes(p_test_across_subj)
+
+```
+
+```{r}
+test_by_subj_all_trials <- d_test_trials |> 
+    mutate(trial_type_renamed = label_map[trial_type_fixed],
+           age_cut = cut(age_years, 
+                         breaks = c(3, 3.25, 4),
+                         labels = c("Young (3-3.25)", "Older (3.25-4)"),
+                         include.lowest = T),
+           pilot="pilot1&2") |> 
+  group_by(SubjNum, pilot) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+test_across_subj_all_trials <- test_by_subj_all_trials |> 
+  group_by(pilot) |> 
+  summarize(mean_prop_correct = mean(prop_correct,na.rm = TRUE))
+
+test_across_subj_all_trials |> 
+  ggplot(aes(y = mean_prop_correct, x = pilot)) + 
+  geom_bar(fill = "#B069DB", stat = "identity") + 
+  theme_minimal(base_size = 14) + 
+  geom_dotplot(data = test_by_subj_all_trials, aes(y = prop_correct), 
+               binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=.75) + 
+  ylim(0,1) +
+  labs(title = "Accuracy on All Test Trials",
+       subtitle = "Each point is a participant",
+       y = "Proportion Correct", 
+       x = "Label Source", 
+       fill = "Pilot") + 
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+
+
+```{r}
+label_map <- c("Match_test" = "Expert", 
+               "Nonmatch_test" = "Nonexpert")
+
+d_test_trials |> 
+  mutate(trial_type_renamed = label_map[trial_type_fixed]) |> 
+  group_by(SubjNum, trial_type_renamed) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+test_by_subj <- d_test_trials |> 
+    mutate(trial_type_renamed = label_map[trial_type_fixed]) |> 
+  group_by(SubjNum, trial_type_renamed) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+test_across_subj <- test_by_subj |> 
+  group_by(trial_type_renamed) |> 
+  summarize(mean_prop_correct = mean(prop_correct,na.rm = TRUE))
+
+test_across_subj |> 
+  ggplot(aes(y = mean_prop_correct, x = trial_type_renamed)) + 
+  geom_bar(aes(fill = trial_type_renamed), stat = "identity") + 
+  theme_minimal(base_size = 14) + 
+  geom_dotplot(data = test_by_subj, aes(y = prop_correct), 
+               binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=.75) + 
+  ylim(0,1) +
+  labs(title = "Accuracy on Test Object Trials",
+       subtitle = "Each point is a participant",
+       y = "Proportion Correct", 
+       x = "Label Source", 
+       fill = "Label Source") 
+```
+
+
+```{r}
+know_questions_by_subj <- rbind(know_toy_by_subj |> mutate(trialType = "Generalization"),
+      know_color_by_subj |> mutate(trialType = "Explicit"))
+
+know_questions_across_subj <- know_questions_by_subj |> 
+  group_by(trialType) |> 
+  summarize(mean_prop_correct = mean(prop_correct, na.rm= T))
+
+  know_questions_across_subj |> 
+    ggplot(aes(x = trialType, y = mean_prop_correct)) + 
+    geom_bar(stat = "identity", aes(fill = trialType)) + 
+    ylim(0,1) + 
+    geom_dotplot(data = know_questions_by_subj, aes(y = prop_correct), 
+               binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=.75) + 
+    theme_minimal(base_size = 14) + 
+    ylim(0,1) +
+  labs(title = "Accuracy on Explicit Knowledge Questions",
+       subtitle = "Each point is a participant",
+       y = "Proportion Correct", 
+       x = "Question Type", 
+       fill = "Question Type") 
+```
+
+```{r}
+test_w_generalization <- test_by_subj |> left_join(know_questions_by_subj |> 
+                            select(SubjNum, prop_correct, trialType, prop_correct) |> 
+                            pivot_wider(names_from = trialType, values_from = prop_correct))
+
+test_w_generalization_generalization <- test_w_generalization |> 
+  group_by(trial_type_renamed, Explicit) |> 
+  summarize(mean_prop_correct = mean(prop_correct,na.rm = TRUE))
+
+test_w_generalization_generalization |> 
+  ggplot(aes(y = mean_prop_correct, x = trial_type_renamed)) + 
+  geom_bar(aes(fill = trial_type_renamed), stat = "identity") + 
+  theme_minimal(base_size = 14) + 
+  geom_dotplot(data = test_w_generalization, aes(y = prop_correct), 
+               binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=.75) + 
+  ylim(0,1) +
+  labs(title = "Accuracy on Test Object Trials",
+       subtitle = "Each point is a participant",
+       y = "Proportion Correct", 
+       x = "Label Source", 
+       fill = "Label Source") +
+  facet_wrap(~ Explicit)
+```
+
+```{r}
+test_w_generalization_generalization <- test_w_generalization |> 
+  group_by(trial_type_renamed, Generalization) |> 
+  summarize(mean_prop_correct = mean(prop_correct,na.rm = TRUE))
+
+test_w_generalization_generalization |> 
+  ggplot(aes(y = mean_prop_correct, x = trial_type_renamed)) + 
+  geom_bar(aes(fill = trial_type_renamed), stat = "identity") + 
+  theme_minimal(base_size = 14) + 
+  geom_dotplot(data = test_w_generalization, aes(y = prop_correct), 
+               binaxis='y', stackdir='center',
+               stackratio=1.5, dotsize=.75) + 
+  ylim(0,1) +
+  labs(title = "Accuracy on Test Object Trials",
+       subtitle = "Each point is a participant",
+       y = "Proportion Correct", 
+       x = "Label Source", 
+       fill = "Label Source") +
+  facet_wrap(~ Generalization)
+```
+
+
+
+```{r}
+know_toy_by_subj <- d_know_toy_trials |> 
+  group_by(SubjNum, trial_type_fixed) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+know_toy_by_subj
+
+mean(know_toy_by_subj$prop_correct)
+
+know_color_by_subj <- d_know_color_trials |> 
+  group_by(SubjNum, trial_type_fixed) |> 
+  summarize(n_trials = n(), 
+            n_correct = sum(correct, na.rm = TRUE),
+             prop_correct = n_correct/n_trials)
+
+know_color_by_subj
+
+mean(know_color_by_subj$prop_correct)
+
+```
+
